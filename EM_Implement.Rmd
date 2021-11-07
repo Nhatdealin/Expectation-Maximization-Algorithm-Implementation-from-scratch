@@ -1,0 +1,1030 @@
+---
+title: "Statistical learning project"
+author: "Minh Nhat Do - Yasmin Mosbah"
+date: "10/27/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Expectation-Maximization (EM) for multivariate GMMs on the Wine dataset
+
+The goal is to apply EM for multivariate GMMs on the Wine dataset, available in the `pgmm` package.
+
+### Instructions
+
+#### 1) Implementing the EM
+
+- Implement from scratch the EM algorithm for a GMM on the variables 2 and 4 of the wine data set.
+- Cluster the data and compare your results with k-means.
+- To assess the quality of the clustering, you may use the function classError and/or adjustedRandIndex from the Mclust package.
+
+
+#### 2) Model selection
+
+- Try to find a relevant number of clusters using the three methods seen in class: AIC, BIC, and (cross-)validated likelihood.
+
+#### 3) Towards higher dimensional spaces
+
+- Try to model more than just two variables of the same data set. Do you find the same clusters, the same number of clusters.
+
+---------------------------------
+
+## 1 - Setup library and dataset summary
+### 1.1. Setup library
+
+In this project, we will use pgmm, ggplot2, expm, mclust libraries to implement.
+
+```{r, include=FALSE}
+library(pgmm)
+library(ggplot2)
+#install.packages("expm")
+library(expm)
+#install.packages("mclust")
+library(mclust)
+#install.packages("scatterplot3d") # Install
+library(scatterplot3d) # load
+```
+
+### 1.2. Wine dataset
+
+From the pgmm package are loaded, we can load the **wine** data in the environment.
+In the first 2 parts, we just work on the variables 2 and 4 of the wine data set (Alcohol and Fixed Acidity). We also load the Type of wine for evaluating the cluster result.
+
+```{r wine}
+data(wine)
+head(wine)
+summary(wine[,c(1,2,4)])
+```
+
+```{r}
+X = as.matrix(wine[,c(2,4)])
+y = wine[,1]
+print("Feature dimensions: ")
+print(paste0("Number of rows: " , nrow(X)))
+print(paste0("Number of columns: " , ncol(X)))
+print("Type valuesof wine: , ")
+print(unique(y))
+plot(X,col=y)
+```
+
+## 2. Implement Expectation-Maximization (EM) Algorithm
+### 2.1. Create usefull functions for implementing
+
+
+```{r}
+# The logarithm of the sum of the exponentials of the arguments
+logsumexp <- function (x) {
+  y = max(x)
+  y + log(sum(exp(x - y)))
+}
+
+#Normelize the arguments
+normalise <- function (x) {
+  logratio = log(x) - logsumexp(log(x))
+  exp(logratio)
+}
+
+# Generator of randoms centroids depended on our data range (Min and Max of each colums in data) for mu
+creator_centroides <- function(n_centroides = 3,datos = datos, seed = 99){#100
+  set.seed(seed)
+
+  x = matrix(ncol = ncol(datos), nrow = n_centroides)
+  for (i in 1:ncol(datos)) {
+    x[,i] = runif(n_centroides,min(datos[,i]), max(datos[,i]))
+  }
+  x = data.frame(x, stringsAsFactors = FALSE)
+  return(as.matrix(x))
+}
+```
+
+
+
+### 2.2. Create function to get computations on Log-likelihood
+
+```{r}
+
+metrics_computation <- function(X, K, prob, mu, sigma) {
+  n = nrow(X)
+  d = ncol(X)
+  log_gamma_numerator = matrix(unlist(lapply(1:K, FUN = function(k) {log(prob[k]) + dmvnorm(X, mu[k,], sigma[[k]], log = TRUE)})), n, K)
+
+  log_likelihood = sum(apply(log_gamma_numerator , 1, logsumexp))
+  return (list(logLik=log_likelihood))
+}
+```
+
+
+### 2.3. EM Algorithm implement
+The EM algorithm is an iterative approach that cycles between two modes.
+We start by initializing random cluster centers and then iteratively refine the clusters based the expectation step and the maximization step. 
+
+The goal is now to estimate our parameters
+$$\theta = (\pi_1,...,\pi_K, \mu_1,...\mu_K, \Sigma_1,...\Sigma_K)$$
+The density of this mixture distribution can be expressed as:
+$$p_\theta(x) = \sum_{k=1}^{K}\pi_k \mathcal{N}(x| \mu_k, \Sigma_k)
+$$
+
+The complete data log likelihood can be expressed as:
+$$\ell(\theta) = \sum_{n=1}^{N}log(\sum_{k=1}^{K}\pi_k \mathcal{N}(x_n| \mu_k, \Sigma_k))
+$$
+
+The EM algorithm consists of 3 major steps:
+
+
+1. Initialization
+
+  We start by initializing random cluster centers
+
+2. Expectation (E-step)
+
+  The Expectation step is to estimate the distribution of hidden variable given the data with the current value of the parameters. The responsablilities or posterior probabilities which will be denoted by $\gamma(z_{nk})$
+
+$$\gamma(z_{nk}) = p(k|x_n) = \frac{\pi_k \mathcal{N}(x_n|  \mu_k, \Sigma_k)}{\sum_{j=1}^{K} \pi_j \mathcal{N}(x_n|  \mu_j, \Sigma_j)}$$
+
+  for all n, k, compute:  $$\gamma(z_{nk})= \frac{\pi_k \mathcal{N}(x_n|  \mu_k, \Sigma_k)}{\sum_{j=1}^{K} \pi_j \mathcal{N}(x_n|  \mu_j, \Sigma_j)}$$
+
+3. Maximization (M-step)
+
+  The Maximization step is to maximize and optimize the parameters. The process is repeated until a good set of parameters and a maximum likelihood is achieved that fits the data.
+  
+ $$\pi_k^{'} = \frac{\sum_{i=1}^{N}Pr(u_i=k \left\vert x_i\right.; \mu, \sigma, \pi)}{N} = \frac{N_k}{N}
+$$
+
+$$\mu_k^{'} = \frac{1}{N_k}\sum_{j=1}^{n}\gamma(z_{nk})x_n$$
+$$\Sigma_k^{'} = \frac{1}{N_k}\sum_{j=1}^{n}\gamma(z_{nk})(x_n - \mu_k)(x_n -\mu_k)^{T}$$
+
+  After each iteration of the EM algorithm (one E step followed by one M step), we can monitor convergence by looking at the evolution of the value of the log-likelihood.
+
+
+**EMOrigin** function is to implement EM algorithm manually.
+
+The Input parameters:
+
+  - X: Data
+
+  - K: Number of clusters
+  
+  - tol: value minimum to early stop
+
+  - max_it: The maximum number of iteration
+
+The Out parameters:
+
+  - prob: A vector of probabilities of clusters ($\pi_k$)
+
+  - mu: The list of final mu values after training ($\mu_k$)
+
+  - sigma: The list of final sigma values after training ($\Sigma_k$)
+  
+  - gamma: The list of final gamma values after training ($\gamma(z_{nk})$)
+
+
+```{r}
+EMOrigin <- function(X, K, max_it=50, tol=1e-8, showits=T){
+  # number rows of X
+  n = nrow(X)
+  # number rows of X
+  p = ncol(X)
+  
+  # initialization of \theta^ - mu, sigma, gamma
+  prob = rep(1/K, K)
+  # Use creator_centroides to create random value depended on our data range for mu
+  mu = creator_centroides(K, X)
+  sigma = lapply(1:K, function(i) cov(X))
+  gamma = matrix(NA, n, K)
+  log_likelihood = 0
+  for  (i in 1:max_it) {
+    #Store old value of log_lik and prob to compare after each iters
+    log_likelihood_old = log_likelihood
+    prob_old = prob
+    # E step
+    log_gamma_numerator = matrix(nrow=n, ncol = K)
+    for (k in 1:K){
+      log_gamma_numerator[,k] = log(prob[k]) + dmvnorm(X, mu[k,], sigma[[k]], log = TRUE)
+    }
+    ## normalize each line of gamma
+    log_gamma = log_gamma_numerator - apply(log_gamma_numerator , 1, logsumexp)
+    gamma = exp(log_gamma)
+    # M step
+    for (k in 1:K){
+      nk = sum(gamma[,k])
+      prob[k] = nk / n
+      mu[k,] = colSums(gamma[,k]*X) / nk
+      sigma[[k]] = ( t(sweep(X, 2, mu[k,])) %*% diag(gamma[,k]) %*% (sweep(X, 2, mu[k,])) ) / nk 
+    }
+    
+    # Evaluate the log-likelihood
+    log_likelihood = sum(apply(log_gamma_numerator , 1, logsumexp))
+    ### compare old to current for convergence
+    parmlistold =  c(log_likelihood_old, prob_old)           # c(log_likelihood_old, prob_old)
+    parmlistcurrent = c(log_likelihood, prob)              # c(log_likelihood, prob)
+    if (showits & (i == 1 | i%%5 == 0))         # if showits true, & it =1 or modulo of 5 print message
+      cat(paste("Iterations ", format(i),  " of EM: ", " ------ loglik : ", log_likelihood,"\n", sep = ""))
+    if(min(abs(parmlistold - parmlistcurrent)) <= tol){
+      break
+    }
+  }
+  # compute the sum log-likelihood
+  metrics = metrics_computation(X, K, prob, mu, sigma)
+  logLik <- metrics$logLik
+  
+  return (list(prob=prob, mu=mu, sigma=sigma, gamma=gamma, logLik=logLik))
+}
+```
+
+After that, we will create a function to get the cluster result from parameters which we got from learning data.
+In this function:
+
+  - The input:  gamma is gamma parameter from learning result.
+
+  - The output:  List of cluster result corresponds to each data appearing in X (format: $[c_1,c_2,c_3, ..., c_N]$ with $c_i \in [0, K]$, K is number of cluster, N: number rows of data X).
+
+```{r}
+# Input param is gamma from EM model result
+EMOrigin.findCluster <- function(gamma){
+  clust = rep(NA, nrow(gamma))
+  # For each rows, we find order of value gamma where have the max gamma value
+  for (i in 1:nrow(gamma)){
+    clust[i] = which.max(gamma[i,])
+  }
+  return (clust)
+}
+```
+
+
+
+### 2.4. K-mean Algorithm implement
+
+The usual way to implement K-means Algorithm is the following:
+
+- Step 1: Initialize randomly the centers by selecting k-observations
+- Step 2: While some convergence criterion is not met
+    - Step 2.1: Assign each observation to its closest center
+    - Step 2.2: Update each center. The new centers are the mean of the observation of each group.
+    - Step 2.3: Update the convergence criterion.
+    
+The input of function:
+- data: Input data
+- K: Number of clusters
+- stop_crit: Stop point to stop loop
+```{r}
+kmeans=function(data,K=4,stop_crit=10e-5)
+{
+  #Initialization step (Initialization of clusters)
+  n = nrow(data)
+  p = ncol(data)
+  centroids=data[sample.int(n,K),]
+  current_stop_crit=1000
+  cluster=rep(0,n)
+  converged=F
+  it=1
+  while(current_stop_crit>=stop_crit & converged==F)
+  {
+    it=it+1
+    if (current_stop_crit<=stop_crit)
+    {
+      converged=T
+    }
+    old_centroids=centroids
+    # Assigning each point to a centroid
+    for (i in 1:n)
+    {
+      min_dist=10e10
+      for (centroid in 1:nrow(centroids))
+      {
+        distance_to_centroid=sum((centroids[centroid,]-data[i,])^2)
+        if (distance_to_centroid<=min_dist)
+        {
+          cluster[i]=centroid
+          min_dist=distance_to_centroid
+        }
+      }
+    }
+    ##Assigning each point to a centroid
+    for (i in 1:nrow(centroids))
+    {
+      centroids[i,]=apply(data[cluster==i,],2,mean)
+    }
+    current_stop_crit=mean((old_centroids-centroids)^2)
+  }
+  return(list(size=tabulate(cluster),cluster=cluster,centers=centroids))
+}
+```
+
+## 3. Comparing EM and K-Means results
+
+We compares two different methods of the unsupervised classification. EM Algorithm have similarity with Kmeans, because they use the same optimization strategy on the M Step algorithm.
+
+K-Means will first generate random cluster centers, then the data in the dataset will be distributed in each of these clusters according to which centroid they are closest. And at each iteration, the cluster center is recalculated and redefined according to the average of the data assigned in the cluster.
+
+In EM case (with mixture of Gaussians) , each Gaussian has an associated mean and covariance matrix. The parameters are initialized by randomly selecting means (like k means), then the algorithm converges on a locally optimal solution by iteratively updating values for means and variance.
+
+K-means finds the parameters of the centroid to minimize X minus the mean squared.
+The EM model finds the centroid to minimize X minus mean squared over the standard deviation squared.
+Mathematically the difference is the denominator $\sigma^2$, which means EM Algorithm takes variance into consideration when it calculates the measurement.
+
+That's why K-Means will assign each data points to exactly one cluster but EM Algorithm will assign data points to cluster with some probability.
+
+### 3.1 EM algorithm result
+
+```{r}
+# Learning data with 3 cluster and 1000 iterations.
+params = EMOrigin(X, 3, 1000, showits = T)
+```
+
+When the loglikelihood does not evolve anymore, the code decides to stop because we have reached the maximum loglikelihood.
+We see that at the beginning of the iterations the loglikelihood evolves enormously, then we notice that loglikelihood converges progressively to the value -949.79. 
+The EM algorithm is used to obtain maximum loglikelihood estimates of the parameters and here the result is -949.79.
+
+
+**This is the final result after training data with GMM model with 3 clusters and variable 2 and variable 4 of wine dataset**
+
+
+```{r}
+params
+```
+
+
+```{r}
+params$prob
+```
+First of all we see that the dataset is not perfectly distributed. We have a cluster (cluster number 3) holding almost half of the data (~48%), while another one holds only ~18% (cluster number 2), and a 3rd cluster (cluster number 1) with 1/3 of the data.
+
+```{r}
+params$mu
+```
+
+```mu``` attribute of ```params``` shows us the position of the centroids of our 3 clusters. It is the average of the characteristics of each type of wine.
+
+We notice that the cluster holding 48% (cluster number 3) of the wines is on average more acidic than the other two types of wines.
+
+The other two types of wines differ in their alcohol concentration. 
+
+Cluster number 2 representing only 18% of the dataset has less alcohol than cluster number 1(34% of the dataset).
+
+
+
+### 3.2. Visualization of the EM algorithm result
+
+```{r}
+cluster_result = EMOrigin.findCluster(params$gamma)
+cluster_result
+```
+Now, we plot the cluster results on X data.
+
+```{r}
+
+plot(X, col=cluster_result, pch=20)
+points(params$mu, col = 1:3, pch = 10, cex=2)
+```
+
+
+This graph confirms our observations. We can see that one cluster is different from the other two in terms of acidity. 
+In the graph representing the 3 brands of wine seen earlier, we can already identify that each brand is different from the others according to these two characteristics (alcohol, acidity). EM Algorithm has more or less succeeded in identifying these 3 types of wine. 
+
+**Plot cluster areas with multivariate t-distribution and a multivariate normal distribution**
+
+We use ggplot geom_point to create a scatter plot by group and use  `stat_ellipse` to create the ellipses for each group. The `stat_ellipse` uses geom_path by default to create the ellipse, but if you set `geom = "polygon"` a polygon will be created. Note that you can change the level of transparency with `alpha`.
+
+Based on the cluster results, we will plot 2 eclipses for each cluster corresponding to a multivariate t-distribution (solid line) and a multivariate normal distribution (dotted line).
+
+
+```{r}
+plot_cluster_area <- function(X, centroids, cluster_result){
+  x_df = data.frame(X)
+  mu_clusters = data.frame(centroids)
+  names(mu_clusters) = names(x_df)
+  colors = as.factor(cluster_result)
+  ggplot(x_df, aes_string(names(x_df)[1], names(x_df)[2], color=colors)) + 
+      geom_point() +
+      stat_ellipse(geom="polygon", aes(fill=colors), alpha=0.15, type = "norm", linetype = 2) + 
+    labs(color="Cluster") +
+    stat_ellipse(geom="polygon", aes(fill=colors), type = "t", alpha=0.15) +guides(fill = "none") + geom_point(data=mu_clusters, color=c(2,3,1), shape=10, size=3)
+}
+```
+
+
+```{r}
+plot_cluster_area(X, params$mu, cluster_result)
+```
+
+
+To compare the result with K-means, we will K-Means algorithm function which we developed above, to get the result.
+
+### 3.3. K-Means algorithm result
+
+Let's go to K-means algorithm in variable 2 and 4 of wine data set with 3 clusters:
+
+
+```{r}
+cl <- kmeans(X, 3,stop_crit=1e-8)
+cl
+```
+
+
+```{r, echo = FALSE}
+print("Distribution of data in the 3 clusters :")
+print("Kmeans :")
+print(paste0((cl$size)/sum(cl$size)))
+print("GMM :")
+print(paste0((params$prob)))
+```
+
+We notice that the number of data per cluster have more or less the same distribution.
+
+```{r}
+cl$centers
+```
+
+Using Kmeans, we notice that the 3 clusters are separated according to the acidity of the wine. All of centroids have more or less the same concentration of alcohol.
+
+### 3.4. Visualization of K-Means algorithm result
+
+```{r}
+plot(X, col = cl$cluster,  pch = 20)
+points(cl$centers, col = 1:3, pch = 10, cex=2)
+```
+
+At first sight, EM algorithm seems to have much better results than K-means. We know the existence of the 3 types of wines and we can see that K-means does not detect the existence of these 3 categories.
+
+K-means has made clusters that are visually linear. It separated each category according to the acidity of the wine and did not classify them according to the alcohol content.
+
+we will plot 2 eclipses for each cluster corresponding to a multivariate t-distribution (solid line) and a multivariate normal distribution (dotted line).
+
+```{r}
+plot_cluster_area(X, cl$centers, cl$cluster)
+```
+
+### 3.5. The quality of the clustering
+
+First, We will split data X to training dataset and testing dataset
+
+```{r}
+## 75% of the sample size
+smp_ratio = 0.75
+smp_size <- floor(smp_ratio * nrow(X))
+
+## set the seed to make your partition reproducible
+set.seed(123)
+train_idx <- sample(seq_len(nrow(X)), size = smp_size)
+
+x_train <- X[train_idx, ]
+x_test <- X[-train_idx, ]
+y_train <- y[train_idx]
+y_test <- y[-train_idx]
+```
+
+Now, we can check the splitted result data and we check if the sub-dataset contains heterogeneously distributed data before training the models.
+
+```{r}
+print("Feature dimensions: ")
+print(paste0("Number rows of training dataset: " , nrow(x_train)))
+plot(x_train,col=y_test, pch=20, main="Training data")
+```
+
+
+```{r}
+print(paste0("Number rows of testing dataset: " , nrow(x_test)))
+plot(x_test,col=y_test, pch=20, main="Testing data")
+```
+
+
+The testing data has less input data, so it will be a challenge for the clustering model. 
+Now we will use this datasets to train and test in EM model and Kmeans
+
+
+- Full dataset:
+
+```{r}
+number_of_cluster = 3
+resultFullEM = EMOrigin(X, number_of_cluster, 1000, showits = F)
+# Find cluster on resultFullEM
+resultFullEM$cluster = EMOrigin.findCluster(resultFullEM$gamma)
+
+resultFullKmeans = kmeans(X, 3, stop_crit=1e-8)
+```
+
+- Training dataset:
+
+```{r}
+number_of_cluster = 3
+resultTrainEM = EMOrigin(x_train, number_of_cluster, 1000, showits = F)
+# Find cluster on resultTrainEM
+resultTrainEM$cluster = EMOrigin.findCluster(resultTrainEM$gamma)
+
+resultTrainKmeans = kmeans(x_train, 3, stop_crit=1e-8)
+```
+
+- Testing dataset:
+
+```{r}
+resultTestEM = EMOrigin(x_test, number_of_cluster, 1000, showits = F)
+# Find cluster on resultTestEM
+resultTestEM$cluster = EMOrigin.findCluster(resultTestEM$gamma)
+
+resultTestKmeans = kmeans(x_test, 3, stop_crit=1e-8)
+```
+
+#### 3.5.1. Classification Error analysis
+
+- Expectation-Maximization on full dataset:
+
+```{r}
+classError(resultFullEM$cluster, y)
+```
+
+- K-Means on full dataset:
+
+```{r}
+classError(resultFullKmeans$cluster, y)
+```
+
+- Expectation-Maximization on training dataset:
+
+```{r}
+classError(resultTrainEM$cluster, y_train)
+```
+
+- K-Means on training dataset:
+
+```{r}
+classError(resultTrainKmeans$cluster, y_train)
+```
+The error rate achieved by EM algorithm is 36% against the 47% of K-means on train dataset.
+
+
+- Expectation-Maximization on testing dataset:
+
+```{r}
+classError(resultTestEM$cluster, y_test)
+```
+
+- K-Means on testing dataset:
+
+```{r}
+classError(resultTestKmeans$cluster, y_test)
+```
+Look at the results, we can see that Em Algorithm is still better than K means and this despite a smaller dataset.
+
+
+#### 3.5.2. Adjusted Rand Index analysis
+The Adjusted Rand score is to determine whether two cluster results are similar to each other.
+When it is equal to 0 the points are randomly assigned to the clusters and when it is equal to 1 the results of both clusters are identical.
+
+
+- Expectation-Maximization on full datatset:
+
+```{r}
+adjustedRandIndex(resultFullEM$cluster, y)
+```
+
+- K-Means on full datatset:
+
+```{r}
+adjustedRandIndex(resultFullKmeans$cluster, y)
+```
+
+
+- Expectation-Maximization on training datatset:
+
+```{r}
+adjustedRandIndex(resultTrainEM$cluster, y_train)
+```
+
+- K-Means on training datatset:
+
+```{r}
+adjustedRandIndex(resultTrainKmeans$cluster, y_train)
+```
+
+We know that the closer we get to a score of 0, the more likely the clustering is to be random, on the contrary if we get closer to a score of 1, then the clustering is almost perfect.
+Here we see that during the training, EM Algorithm is better than K-Means
+
+- Expectation-Maximization on testing datatset:
+
+```{r}
+adjustedRandIndex(resultTestEM$cluster, y_test)
+```
+
+- K-Means on testing datatset:
+
+```{r}
+adjustedRandIndex(resultTestKmeans$cluster, y_test)
+```
+
+We see that during the test, both models were worse than during the training, but EM Algorithm remains much better than KMean.
+
+### 3.6. Observation and comments
+
+The difference between the results of K-means and EM algorithm are truly visible. We don't have the same clusters at all. This result is different because K-means does not take into account the standard deviation of the data.
+
+In our case we see that Em Algorithm produces much better results than K-Means. 
+K-means has difficulty in clustering data when the clusters are of varying size and density. It is a clustering method that requires data with rather spherical clusters, which is not the case in the dataset we study. This may explain the significant difference in results between K-Means and EM Algorithm. 
+
+
+## 4. Model Selection
+
+We have many way to select the best number of cluster such as BIC, AIC,.... So now, we will use 3 ways to select the K parameter:
+
+ - The **Akaike information criterion (AIC)** : An estimator of prediction error and thereby relative quality of statistical models for a given set of data
+
+ - the **Bayesian information criterion (BIC)** : A criterion for model selection among a finite set of models
+
+ - **Cross-validate K folds** on likelihood: A resampling method that uses different portions of the data to test and train a model on different iterations. It is mainly used in settings where the goal is prediction, and one wants to estimate how accurately a predictive model will perform in practice.
+ 
+
+
+### 4.1. Model selection based on AIC score
+
+To compute penalization in AIC criteria, we need to compute number of  model's parameters.
+
+In practice, number of  model's parameters is easy to compute:
+
+$$\eta(GMM\text{ with K}) = \text{number of } \pi_k + \text{number of } \mu_k + \text{number of } \Sigma_k \\
+                  = (K - 1) + K \times d + K \times \frac{d(d+1)}{2}$$
+                  
+                  
+  AIC formula:
+
+  $$BIC = log(\mathcal{L}(x;\phi)) -  \eta(GMM\text{ with K})$$
+
+```{r}
+AIC <- function(log_likelihood, K, data) {
+  # K is number of clusters
+  # D is number of columns of Data
+  n = nrow(data)
+  d = ncol(data)
+  ######
+  #### Implementation of the the Akaike Information Criterion such that:
+  #### AIC = LogLikelihood - eta(M) with eta is number of parameters of model
+  nb.param <- (K - 1) + K * d + K*d*(d+1)/2
+  aic_score = log_likelihood - nb.param
+  return(aic_score)
+}
+
+modelSelectionAIC <- function(data, listNumberCluster=2:10, print_steps=TRUE){
+  ####
+  #### Computes the AIC of an EM algorithm implementation given a dataset
+  #### Input includes:
+  #### data: Input data
+  #### listNumberCluster: range of clusters for checking
+  #### print_steps: Print process steps
+  #### Output: result - result AIC scores, bestK - the best of number of cluster
+  
+  # Variable declaration
+  aic_results = c()
+  
+  # Use for loop to compute the corresponding AIC on each cluster parameter and push to a list
+  for (j in listNumberCluster){
+    res = EMOrigin(data, j, showits=F)
+    aic_value = AIC(res$logLik, j, data)
+    aic_results = append(aic_results, aic_value)
+    if (print_steps) {
+      print(paste("Cluster ", j, "--- Log-likelihood = ",
+                  round(aic_value, 3)))
+    }
+  }
+  
+  # Prints the result
+  print(paste("The best K value is ", listNumberCluster[which.max(aic_results)] , " clusters (Based on AIC score)."))
+  return (list(result=aic_results,bestK= which.max(aic_results)))
+}
+```
+
+
+### 4.2. Model selection based on BIC score
+
+It's same steps with computation of AIC, we need to find the number of  model's parameters to compute BIC score:
+
+$$\eta(GMM\text{ with K}) = \text{number of } \pi_k + \text{number of } \mu_k + \text{number of } \Sigma_k \\
+                  = (K - 1) + K \times d + K \times \frac{d(d+1)}{2}$$
+                  
+                  
+  BIC formula:
+
+$$BIC = log(\mathcal{L}(x;\phi)) - \frac{1}{2}\times log(n)\times \eta(GMM\text{ with K})$$
+
+```{r}
+BIC <- function(log_likelihood, K, data) {
+  # K is number of clusters
+  # D is number of columns of Data
+  n = nrow(data)
+  d = ncol(data)
+  ######
+  #### Implementation of the Bayesian Information Criterion such that:
+  #### BIC = LogLikelihood - (eta(M)*log(n))/2
+  nb.param <- (K - 1) + K * d + K*d*(d+1)/2
+  bic_score = log_likelihood - nb.param *log(n) / 2
+  return (bic_score)
+}
+
+modelSelectionBIC <- function(data, listNumberCluster=2:10, print_steps=TRUE){
+  ######
+  #### Computes the BIC of an EM algorithm implementation given a dataset
+  #### Input includes:
+  #### data: Input data
+  #### listNumberCluster: range of clusters for checking
+  #### print_steps: Print process steps
+  #### Output: result - result BIC scores, bestK - the best of number of cluster
+  
+  # Variable declaration
+  bic_results = c()
+  
+  # Use for loop to compute the corresponding AIC on each cluster parameter and push to a list
+  for (j in listNumberCluster){
+    res = EMOrigin(data, j, showits=F)
+    bic_value = BIC(res$logLik, j, data)
+    bic_results = append(bic_results, bic_value)
+    if (print_steps) {
+      print(paste("Cluster ", j, "--- Log-likelihood = ",
+                  round(bic_value, 3)))
+    }
+  }
+  
+  # Prints the result
+  print(paste("The best K value is ", listNumberCluster[which.max(bic_results)] , " clusters (Based on BIC score)."))
+  return (list(result=bic_results,bestK= which.max(bic_results)))
+}
+```
+
+
+### 4.3. Model selection based on Cross-validate on Log-likelihood
+
+The general procedure of cross-validation k-fold is as follows:
+
+1. Shuffle the dataset randomly.
+
+2. Split the dataset into k groups
+
+3. For each unique group:
+
+    + Take the group as a hold out or test data set
+  
+    + Take the remaining groups as a training data set
+  
+    + Fit a model on the training set and evaluate it on the test set
+  
+    + Retain the evaluation score and discard the model
+  
+4. Return the averaged of evaluation score
+
+We will use a for loop from minimum number of clusters to maximum number of cluster to compute the averaged of evaluation score by cross-validation k-folds to find the best number of cluster (K).
+
+
+```{r}
+crossValidation <- function(data,clusters=2, folds=10, seeds=143) {
+  # Shuffle data
+  set.seed(seeds)
+  rows <- sample(nrow(data))
+  shuffle_data = data[rows, ]
+  # Variable declaration
+  n_train = dim(shuffle_data)[1]
+  fold_indexes = split(c(1:n_train), 
+                       ceiling(seq_along(c(1:n_train))/(n_train/folds)))
+  listLogLiks = c()
+  
+  for (kFold in fold_indexes){
+    # create train and validation dataset from created kFold indexes
+    x_train = shuffle_data[-kFold,]
+    x_val = shuffle_data[kFold,]
+    # Get result cluster from EMOrigin with x_train
+    resultsEM = EMOrigin(x_train, clusters,tol=1e-9,showits = F)
+    valLogLik = metrics_computation(x_val, clusters, resultsEM$prob, resultsEM$mu, resultsEM$sigma)
+    listLogLiks = append(listLogLiks, valLogLik$logLik)
+  }
+  #Return mean of log-likelihoods archived from validation data set during 10 Folds
+  return(mean(listLogLiks))
+  
+}
+
+modelSelectionCrossValidate <- function(data, listNumberCluster=2:10, print_steps=TRUE){
+  ######
+  #### Computes the BIC of an EM algorithm implementation given a dataset
+  #### Input includes:
+  #### data: Input data
+  #### listNumberCluster: range of clusters for checking
+  #### print_steps: Print process steps
+  #### Output: result - result Cross-validation scores, bestK - the best of number of cluster
+  
+  # Variable declaration
+  crossval_results = c()
+  
+  # Use for loop to compute the corresponding AIC on each cluster parameter and push to a list
+  for (j in listNumberCluster){
+    validationLogLik = crossValidation(data, cluster=j, folds=10)
+    if (print_steps) {
+      print(paste("Cluster ", j, "--- Log-likelihood = ",
+                  round(validationLogLik, 3)))
+    }
+    # Append val log-likelihood to list result
+    crossval_results = append(crossval_results, validationLogLik)
+  }
+  
+  # Prints the result
+  print(paste("The best K value is ", listNumberCluster[which.max(crossval_results)] , " clusters (Based on Cross-validation on Log-likelihood)."))
+  return (list(result=crossval_results,bestK= which.max(crossval_results)))
+}
+```
+
+Let's apply AIC, BIC and cross-validation to find the best number of clusters in range from 3 to 10 clusters.
+
+
+```{r}
+nbClusterRange = 3:10
+aic_results = modelSelectionAIC(X, nbClusterRange)
+plot(nbClusterRange, aic_results$result, type = "b", pch = 19, 
+     col = "red", xlab = "Number of cluster", ylab = "AIC Score", main="AIC results on clusters")
+```
+
+At first sight, AIC offers us a rather unstable result.
+According to the graph, the ideal number of clusters proposed by AIC is 6.
+
+```{r}
+bic_results = modelSelectionBIC(X, nbClusterRange)
+plot(nbClusterRange, bic_results$result, type = "b", pch = 19, 
+     col = "red", xlab = "Number of cluster", ylab = "BIC Score", main="BIC results on clusters")
+```
+
+BIC gives us a much more stable result than AIC.
+According to the graph, the ideal number of clusters proposed by BIC is 3.
+
+```{r}
+nbClusterRange = 3:10
+crossval_results = modelSelectionCrossValidate(X, listNumberCluster = nbClusterRange)
+plot(nbClusterRange, crossval_results$result, type = "b", pch = 19, 
+     col = "red", xlab = "Number of cluster", ylab = "Averaged Log-likelihood", main="Cross-Validation results on clusters")
+```
+
+Like BIC, Cross Validation gives us a much more stable result than AIC.
+
+According to the graph, the ideal number of clusters proposed by BIC is 3.
+
+### 4.4. Observation and comments
+
+We see that cross validation and BIC both propose the same number of ideal clusters. They also have Averaged Log-likelihood results that drop progressively with the number of clusters. AIC is affected quite a lot when the number of clusters grows too high. This leads to a decrease in the reliability of the result due to its instability. Meanwhile, BIC increases the penalty when the number of clusters increases, making the result still stable
+
+Often users will want the smallest possible number of clusters so that their data is consistent. Thereby we can see that the results on BIc and cross-validation are better than AIC.
+
+## 5. Analysis on the higher dimensions of wine data set
+
+
+
+### 5.1. Selecting features by hand
+
+In this analysis, we will choose 3 features of wine data set to increase dimensions of data training. We will look at the impact of them on the below results. Because it is random I will take 3 even numbers 2, 4, 6 for the 3 features positions that I will take as input data.
+
+```{r}
+X_3_features = as.matrix(wine[,c(2,4,6)])
+```
+
+As we know in above part, BIC is also quite better than AIC in using to find the best possible number of clusters K. So we will use BIC to find the best number of cluster K for 3 features data. We don't use cross-validation k-folds because it takes too much time to find that.
+
+```{r}
+nbClusterRange = 3:10
+bic_3f_results = modelSelectionBIC(X_3_features, nbClusterRange)
+plot(nbClusterRange, bic_3f_results$result, type = "b", pch = 19, 
+     col = "red", xlab = "Number of cluster", ylab = "Sum of likelihood", main="BIC results on clusters")
+```
+
+So now, we got the best K value is 3 clusters. we will train again EM model with 4 features data and 3 cluster. After that, we will visualize it to easy to see the result.
+
+```{r}
+params_3f = EMOrigin(X_3_features, 3, 1000, showits = F)
+params_3f
+```
+
+Look at the result of clustering, with 3 cluster, we can see the probabilities of each cluster are 0.53385025, 0.42880247, 0.03734727
+
+We will plot 3D graph to see all data with 3-dimensions of data.
+
+```{r}
+cluster_3f_result = EMOrigin.findCluster(params_3f$gamma)
+colors <- c("#999999", "#E69F00", "#56B4E9")
+colors <- colors[as.numeric(cluster_3f_result)]
+scatterplot3d(X_3_features, pch = 19, color=colors,box=FALSE)
+```
+
+Now we can draw a plot on 2 variables we used in above part to visualize the impact when we increase number of data dimension.
+
+
+```{r}
+plot(X_3_features[,c(1,2)], col=cluster_3f_result, pch=19)
+points(params_3f$mu[,c(1,2)], col = 1:3, pch = 10, cex=2)
+```
+
+Plot cluster area with data:
+
+```{r}
+plot_cluster_area(X_3_features[,c(1,2)], params_3f$mu[,c(1,2)], cluster_3f_result)
+```
+
+
+We can comoute the classification error rate by classError() function in mclust library:
+
+```{r}
+classError(cluster_3f_result, y)
+```
+
+```{r}
+adjustedRandIndex(cluster_3f_result, y)
+```
+
+**Comment:** 
+
+After many times of experimenting with changing input features of the data, we have come to a conclusion that: Increasing the number of dimensions of the data sometimes give us different clusters and different on the number of clusters. There are many cases where the added features are not useful enough in data clustering. When adding data feature that has no utility or impact on another features, the result is that one cluster will be very small compared to the other two. This situation leads to when using BIC, AIC, or Cross-validation to find the best number of clusters is no longer accurate. The fact that a cluster is almost invisible in the data set will cause uncertainty in the calculation of BIC, AIC, and average log-likelihood from the training results because it is too small to be estimated.
+
+
+### 5.2. Generate random higher-dimension data
+
+To have an objective and overall view, instead of manually randomly taking the features of the data, we will automatically generate random for 3 cases 3-Dimensions data, 4-Dimensions data and 5-Dimensions data. Each case, we will create random 5 samples to see the best number of cluster and classification error on this
+
+
+```{r}
+set.seed(110)
+#110
+generateHigherDimSample <-function(data, n){
+  max_features = ncol(data)
+  results = lapply(1:5, function(i) sort(sample(1:max_features, n, replace=F)))
+  return(results)
+}
+list_features_5d = generateHigherDimSample(wine[,-1], 5)
+list_features_4d = generateHigherDimSample(wine[,-1], 4)
+list_features_3d = generateHigherDimSample(wine[,-1], 3)
+```
+
+Now, we will analyze in  3-Dimensions, 4-Dimensions and 5-Dimensions data sets which generated above.
+
+### 5.2.1. 3-Dimensions datasets
+
+```{r}
+nbClusterRange = 3:10
+headers = colnames(wine[,-1])
+list_K_3d_result = c()
+for (i in 1:length(list_features_3d)){
+  x_3d = as.matrix(wine[, list_features_3d[[i]]])
+  cat("Feature names: ", paste( unlist(headers[list_features_3d[[i]]]), collapse=' ______ '), "\n")
+  resultBIC = modelSelectionBIC(x_3d, nbClusterRange, print_steps=F)
+  resultAIC = modelSelectionAIC(x_3d, nbClusterRange, print_steps=F)
+  
+  list_K_3d_result = append(list_K_3d_result, resultBIC$bestK)
+  print("----------------------")
+}
+```
+We can see that if we based on BIC scores to find the best number of cluster, the result will be almost around 3 or 4. However, some cases we will get some high number of cluster. This is unstable because the selected features are not related to others and make clustering more difficult. The high number of clusters shows that the input data is difficult to cluster, so it has to be divided into many different small clusters. Besides, achieved number
+
+Let's see the result of 4-Dimensions datasets.
+
+### 5.2.2. 4-Dimensions datasets
+
+
+```{r}
+list_K_4d_result = c()
+for (i in 1:length(list_features_4d)){
+  x_4d = as.matrix(wine[, list_features_4d[[i]]])
+  cat("Feature names: ", paste( unlist(headers[list_features_4d[[i]]]), collapse=' ______ '), "\n")
+  resultBIC = modelSelectionBIC(x_4d, nbClusterRange, print_steps=F)
+  resultAIC = modelSelectionAIC(x_4d, nbClusterRange, print_steps=F)
+  list_K_4d_result = append(list_K_4d_result, resultBIC$bestK)
+  print("----------------------")
+}
+```
+
+
+### 5.2.3. 5-Dimensions datasets
+
+
+```{r}
+list_K_5d_result = c()
+for (i in 1:length(list_features_5d)){
+  x_5d = as.matrix(wine[, list_features_5d[[i]]])
+  cat("Feature names: ", paste( unlist(headers[list_features_5d[[i]]]), collapse=' ______ '), "\n")
+  resultBIC = modelSelectionBIC(x_5d, nbClusterRange, print_steps=F)
+  resultAIC = modelSelectionAIC(x_5d, nbClusterRange, print_steps=F)
+  list_K_5d_result = append(list_K_5d_result, resultBIC$bestK)
+  print("----------------------")
+}
+```
+
+
+### 5.3. Observation and comments
+
+As we have seen the results, increasing the data dimension by adding features will sometimes fragment the data and make clustering difficult. On the printed results we can see that for each dataset with the same dimension we get a very different number of clusters: At a dimensional count of 3, we get some 3 clusters results - the difference is not too big with the dimension of 3. In the cases of 4 and 5, the results are completely different and the number of clusters is high. 
+
+In the process of adding features to train the clustering, some features accidentally fragmented the data, breaking the consistency of the data. Thereby showing us the importance of data analysis and selection, which has a great influence on the results of clustering.
+
+
+## 6. Conclusion
+
+
+In this project, we have successfully built EM for GMM algorithm and applied it to wine. Through analyzing the obtained results as well as comparing with the K-means algorithm, we have come to some conclusions as follows:
+
+With the application of the above two algorithms to cluster alcohol based on Alcohol and Fixed Acidity of alcohol, the EM algorithm gives better clustering results than K-means. The results obtained for the given Wine type from the data are more similar than the results from K-means.
+
+Second, The use of criteria to select the number of clusters is very important. In this project, we tested on 3 criteria which are AIC score, BIC score and cross-validation on likelihood. The obtained results show that the BIC score and cross-validation are stable and are not affected too much when the number of clusters increases. The AIC score shows instability and is not really reliable.
+
+Third, increasing the number of dimensions of the data will sometimes fragment the data and cause difficulties in the clustering process. The number of clusters increases when we use unhelpful features from the data. Care should be taken in selecting and analyzing features before adding input data.
